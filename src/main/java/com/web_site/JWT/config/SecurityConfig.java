@@ -21,14 +21,26 @@ public class SecurityConfig {
     @Autowired
     private JwtAuthenticationFilter jwtAuthenticationFilter;
 
+    @Autowired
+    private RestAuthenticationEntryPoint authenticationEntryPoint;
+
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
         http
+                // Сессий нет, состояние держит токен, поэтому CSRF-защита не нужна.
                 .csrf(csrf -> csrf.disable())
 
                 .authorizeHttpRequests(auth -> auth
+                        // Вход, регистрация и обновление токена доступны без авторизации.
                         .requestMatchers("/api/auth/**").permitAll()
+
+                        // HTML-страницы отдаются всем: они пустые, данные на них
+                        // подгружает скрипт, приложив токен. Защищены именно /api/**.
                         .requestMatchers("/login", "/protected", "/profile").permitAll()
+
+                        // Стили и скрипты.
+                        .requestMatchers("/css/**", "/js/**", "/favicon.ico").permitAll()
+
                         .requestMatchers("/h2-console/**").permitAll()
 
                         .anyRequest().authenticated()
@@ -38,6 +50,11 @@ public class SecurityConfig {
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS)
                 )
 
+                .exceptionHandling(handling -> handling
+                        .authenticationEntryPoint(authenticationEntryPoint)
+                )
+
+                // Консоль H2 работает внутри frame, поэтому запрет фреймов снят.
                 .headers(headers -> headers
                         .frameOptions(frame -> frame.disable())
                 );
@@ -46,7 +63,6 @@ public class SecurityConfig {
 
         return http.build();
     }
-
 
     @Bean
     public PasswordEncoder passwordEncoder() {

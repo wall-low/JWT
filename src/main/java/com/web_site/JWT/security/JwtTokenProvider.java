@@ -1,16 +1,24 @@
 package com.web_site.JWT.security;
 
-import io.jsonwebtoken.*;
+import io.jsonwebtoken.Claims;
+import io.jsonwebtoken.JwtException;
+import io.jsonwebtoken.Jwts;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.SecretKey;
+import java.nio.charset.StandardCharsets;
 import java.util.Date;
+import java.util.UUID;
 
 @Component
 public class JwtTokenProvider {
 
+    private static final Logger log = LoggerFactory.getLogger(JwtTokenProvider.class);
 
     @Value("${jwt.secret}")
     private String jwtSecret;
@@ -21,37 +29,37 @@ public class JwtTokenProvider {
     @Value("${jwt.refresh-token-expiration}")
     private long refreshTokenExpiration;
 
-    public String generateAccessToken(String username){
-        Date now = new Date();
-        Date expiryDate = new Date(now.getTime()+accessTokenExpiration);
+    private SecretKey key;
 
-        SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes());
+    @PostConstruct
+    void init() {
+        key = Keys.hmacShaKeyFor(jwtSecret.getBytes(StandardCharsets.UTF_8));
+    }
 
-        return Jwts.builder()
-                .subject(username)
-                .issuedAt(now)
-                .expiration(expiryDate)
-                .signWith(key)
-                .compact();
+    public String generateAccessToken(String username) {
+        return buildToken(username, accessTokenExpiration);
     }
 
     public String generateRefreshToken(String username) {
-        Date now = new Date();
-        Date expiryDate = new Date(now.getTime() + refreshTokenExpiration);
+        return buildToken(username, refreshTokenExpiration);
+    }
 
-        SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes());
+    private String buildToken(String username, long lifetimeMillis) {
+        Date now = new Date();
 
         return Jwts.builder()
+                // Время выдачи хранится с точностью до секунды, поэтому два токена
+                // одного пользователя, выпущенные подряд, совпали бы байт в байт.
+                // Уникальный идентификатор делает каждый токен отличным от прочих.
+                .id(UUID.randomUUID().toString())
                 .subject(username)
                 .issuedAt(now)
-                .expiration(expiryDate)
+                .expiration(new Date(now.getTime() + lifetimeMillis))
                 .signWith(key)
                 .compact();
     }
 
     public String getUsernameFromToken(String token) {
-        SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes());
-
         Claims claims = Jwts.parser()
                 .verifyWith(key)
                 .build()
@@ -61,18 +69,20 @@ public class JwtTokenProvider {
         return claims.getSubject();
     }
 
-    public boolean validateToken(String token){
+    public boolean validateToken(String token) {
         try {
-            SecretKey key = Keys.hmacShaKeyFor(jwtSecret.getBytes());
             Jwts.parser()
                     .verifyWith(key)
                     .build()
                     .parseSignedClaims(token);
             return true;
-        }catch (JwtException | IllegalArgumentException e) {
-            System.out.println("Невалидный JWT токен: " + e.getMessage());
+        } catch (JwtException | IllegalArgumentException e) {
+            log.debug("Токен отклонён: {}", e.getMessage());
+            return false;
         }
-        return false;
     }
 
+    public long getRefreshTokenExpiration() {
+        return refreshTokenExpiration;
+    }
 }

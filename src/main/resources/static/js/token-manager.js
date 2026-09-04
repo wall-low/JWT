@@ -1,103 +1,130 @@
-// Общий модуль для управления JWT токенами
+// Работа с JWT на стороне браузера: хранение, обновление, запросы с токеном.
 
-// Проверяет и обновляет токен если он истёк или скоро истечёт
-async function checkAndRefreshToken() {
-    const accessToken = localStorage.getItem('accessToken');
-    const refreshToken = localStorage.getItem('refreshToken');
+const TokenManager = (() => {
 
-    if (!accessToken || !refreshToken) {
-        return false;
+    const listeners = [];
+
+    function notify(message) {
+        const time = new Date().toLocaleTimeString('ru-RU');
+        listeners.forEach(fn => fn(time, message));
     }
 
-    // Декодируем JWT чтобы проверить срок действия
-    const tokenData = parseJwt(accessToken);
-    const currentTime = Math.floor(Date.now() / 1000);
+    function onEvent(fn) {
+        listeners.push(fn);
+    }
 
-    // Если токен истёк или истечёт в течение 10 секунд
-    if (tokenData.exp <= currentTime + 10) {
-        console.log('🔄 Access token истёк или скоро истечёт. Обновляем...');
-
+    function parseJwt(token) {
         try {
-            const response = await fetch('/api/auth/refresh', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify({
-                    refreshToken: refreshToken
-                })
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-
-                // Сохраняем новый access token
-                const oldToken = localStorage.getItem('accessToken');
-                localStorage.setItem('accessToken', data.accessToken);
-
-                // Статистика
-                const count = parseInt(localStorage.getItem('refreshCount') || '0');
-                localStorage.setItem('refreshCount', (count + 1).toString());
-                localStorage.setItem('lastRefreshTime', Date.now().toString());
-
-                console.log('✅ Access token обновлён!');
-                console.log('🔑 Старый:', oldToken.slice(-20));
-                console.log('🔑 Новый:', data.accessToken.slice(-20));
-                console.log('♻️  Refresh token не изменился:', refreshToken === data.refreshToken);
-
-                return true; // Токен был обновлён
-            } else {
-                console.error('❌ Ошибка обновления токена');
-                // Редирект на логин если refresh токен невалиден
-                localStorage.clear();
-                window.location.href = '/login';
-            }
-        } catch (error) {
-            console.error('❌ Ошибка:', error);
+            const payload = token.split('.')[1];
+            const normalized = payload.replace(/-/g, '+').replace(/_/g, '/');
+            const json = decodeURIComponent(
+                atob(normalized)
+                    .split('')
+                    .map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2))
+                    .join('')
+            );
+            return JSON.parse(json);
+        } catch (e) {
+            return null;
         }
-    } else {
-        const timeLeft = tokenData.exp - currentTime;
-        console.log(`✅ Access token ещё валиден (осталось ${timeLeft} сек)`);
     }
 
-    return false; // Токен не обновлялся
-}
-
-// Декодирование JWT токена
-function parseJwt(token) {
-    try {
-        const base64Url = token.split('.')[1];
-        const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
-        const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
-            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-        }).join(''));
-
-        return JSON.parse(jsonPayload);
-    } catch (e) {
-        console.error('Ошибка декодирования JWT:', e);
-        return { exp: 0 };
+    function secondsLeft(token) {
+        const data = parseJwt(token);
+        if (!data || !data.exp) {
+            return 0;
+        }
+        return Math.max(0, data.exp - Math.floor(Date.now() / 1000));
     }
-}
 
-// Показать информацию о токене в консоли
-function showTokenInfo() {
-    const accessToken = localStorage.getItem('accessToken');
-    const refreshToken = localStorage.getItem('refreshToken');
-
-    if (accessToken) {
-        const data = parseJwt(accessToken);
-        const currentTime = Math.floor(Date.now() / 1000);
-        const timeLeft = data.exp - currentTime;
-
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('📊 Информация о токенах:');
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-        console.log('👤 Username:', data.sub);
-        console.log('⏰ Выдан:', new Date(data.iat * 1000).toLocaleTimeString());
-        console.log('⏳ Истекает:', new Date(data.exp * 1000).toLocaleTimeString());
-        console.log('⌛ Осталось:', timeLeft, 'секунд');
-        console.log('🔑 Access (конец):', accessToken.slice(-20));
-        console.log('♻️  Refresh (конец):', refreshToken.slice(-20));
-        console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+    function getAccessToken() {
+        return localStorage.getItem('accessToken');
     }
-}
+
+    function getUsername() {
+        return localStorage.getItem('username');
+    }
+
+    function getRefreshCount() {
+        return parseInt(localStorage.getItem('refreshCount') || '0', 10);
+    }
+
+    function clear() {
+        localStorage.clear();
+    }
+
+    function requireAuth() {
+        if (!getAccessToken() || !localStorage.getItem('refreshToken')) {
+            window.location.href = '/login';
+            return false;
+        }
+        return true;
+    }
+
+    // Обновляет access токен, если до истечения осталось меньше порога.
+    // Возвращает true, если обновление действительно произошло.
+    async function ensureFresh(thresholdSeconds = 10) {
+        const accessToken = getAccessToken();
+        const refreshToken = localStorage.getItem('refreshToken');
+
+        if (!accessToken || !refreshToken) {
+            return false;
+        }
+
+        if (secondsLeft(accessToken) > thresholdSeconds) {
+            return false;
+        }
+
+        notify('Access токен истекает, запрашиваю обновление');
+
+        const response = await fetch('/api/auth/refresh', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ refreshToken })
+        });
+
+        if (!response.ok) {
+            notify('Refresh токен отклонён, требуется повторный вход');
+            clear();
+            window.location.href = '/login';
+            return false;
+        }
+
+        const data = await response.json();
+        localStorage.setItem('accessToken', data.accessToken);
+        localStorage.setItem('refreshCount', String(getRefreshCount() + 1));
+
+        notify('Получен новый access токен, refresh не менялся');
+        return true;
+    }
+
+    // Запрос к защищённому API: сначала при необходимости обновляет токен.
+    async function authFetch(url, options = {}) {
+        await ensureFresh();
+
+        const headers = Object.assign({}, options.headers, {
+            'Authorization': 'Bearer ' + getAccessToken()
+        });
+
+        return fetch(url, Object.assign({}, options, { headers }));
+    }
+
+    async function logout() {
+        const token = getAccessToken();
+
+        if (token) {
+            await fetch('/api/auth/logout', {
+                method: 'POST',
+                headers: { 'Authorization': 'Bearer ' + token }
+            }).catch(() => {});
+        }
+
+        clear();
+        window.location.href = '/login';
+    }
+
+    return {
+        parseJwt, secondsLeft, getAccessToken, getUsername, getRefreshCount,
+        requireAuth, ensureFresh, authFetch, logout, onEvent
+    };
+})();

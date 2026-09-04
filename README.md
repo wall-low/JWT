@@ -1,253 +1,104 @@
-# 🔐 Spring Boot JWT Authentication Demo
+# Spring Boot JWT Authentication
 
-Демонстрационный проект на Spring Boot с полноценной JWT-аутентификацией, включая access/refresh токены и систему blacklist.
+Авторизация на JWT: пара access и refresh токенов, автообновление сессии и отзыв токена при выходе.
 
-## 🚀 Технологии
+![Java](https://img.shields.io/badge/Java-24-ED8B00?logo=openjdk&logoColor=white)
+![Spring Boot](https://img.shields.io/badge/Spring_Boot-3.5-6DB33F?logo=springboot&logoColor=white)
+![H2](https://img.shields.io/badge/H2-in--memory-004488)
+![License](https://img.shields.io/badge/License-MIT-green)
 
-- **Spring Boot 3.5.8** - основной фреймворк
-- **Spring Security** - аутентификация и авторизация
-- **JWT (jjwt 0.12.6)** - JSON Web Tokens
-- **Spring Data JPA** - работа с базой данных
-- **H2 Database** - встроенная база данных
-- **Thymeleaf** - серверный рендеринг (опционально)
-- **Lombok** - уменьшение boilerplate кода
-- **Java 24** - последняя версия Java
+Учебный проект, чтобы разобраться с JWT на практике. Кроме API есть три страницы, где
+видно, что происходит с токеном: сколько ему осталось жить, из чего он состоит и когда
+обновился.
 
-## ✨ Возможности
+## Скриншоты
 
-- ✅ Регистрация и вход пользователей
-- ✅ Генерация Access и Refresh токенов
-- ✅ Автоматическое обновление токенов
-- ✅ Blacklist для отозванных токенов (logout)
-- ✅ Защищенные API эндпоинты
-- ✅ REST API + MVC страницы (Thymeleaf)
-- ✅ H2 консоль для отладки
+<img src="screenshots/login.png" alt="Вход" width="100%">
 
-## 📋 Требования
+<img src="screenshots/protected.png" alt="Состояние токена" width="100%">
 
-- Java 24 (или совместимая версия)
-- Gradle (или используй встроенный `./gradlew`)
+<img src="screenshots/profile.png" alt="Профиль" width="100%">
 
-## 🛠️ Установка и запуск
+## Как работает
 
-### 1. Клонировать репозиторий
+При входе выдаются два токена. **Access** живёт 15 минут и ходит в каждом запросе,
+**refresh** живёт неделю и нужен только чтобы выпустить новый access. Короткий токен
+светится в сети постоянно, длинный лежит на клиенте и используется редко.
 
-```bash
-git clone <your-repo-url>
-cd JWT
-```
+Токен проверяется в `JwtAuthenticationFilter` — он стоит в цепочке Spring Security перед
+обычной проверкой пароля. Сессий на сервере нет, режим `STATELESS`.
 
-### 2. Запустить приложение
+Когда до истечения access остаётся меньше 10 секунд, фронт сам дёргает `/api/auth/refresh`.
+Пользователь ничего не замечает.
 
-```bash
-./gradlew bootRun
-```
+Сложность была с выходом: сервер не хранит состояние и не может «забыть» токен — тот
+работает до конца срока. Поэтому при logout токен пишется в таблицу `blacklisted_tokens`.
+Чтобы она не росла бесконечно, раз в час `BlacklistCleanupTask` вычищает всё, что уже
+протухло само.
 
-Приложение запустится на **http://localhost:8081**
+## API
 
-### 3. Доступ к H2 консоли
+| Метод | Путь | Что делает |
+|---|---|---|
+| POST | `/api/auth/register` | Регистрация |
+| POST | `/api/auth/login` | Вход, выдаёт два токена |
+| POST | `/api/auth/refresh` | Новый access по refresh |
+| POST | `/api/auth/logout` | Отзыв токена |
+| GET | `/api/user/info` | Данные пользователя, нужен токен |
 
-- URL: **http://localhost:8081/h2-console**
-- JDBC URL: `jdbc:h2:mem:testdb`
-- Username: `sa`
-- Password: _(оставить пустым)_
+Ошибки приходят единым форматом:
 
-## 🌐 API Эндпоинты
-
-### Публичные эндпоинты
-
-#### Регистрация
-```bash
-POST /api/auth/register
-Content-Type: application/json
-
-{
-  "username": "user123",
-  "password": "password123"
-}
-```
-
-#### Вход
-```bash
-POST /api/auth/login
-Content-Type: application/json
-
-{
-  "username": "user123",
-  "password": "password123"
-}
-```
-
-**Ответ:**
 ```json
 {
-  "accessToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "refreshToken": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...",
-  "username": "user123"
+  "status": 400,
+  "message": "Проверьте введённые данные",
+  "fields": { "password": "Пароль должен быть не короче 6 символов" }
 }
 ```
 
-#### Обновление токена
 ```bash
-POST /api/auth/refresh
-Content-Type: application/json
-
-{
-  "refreshToken": "your-refresh-token"
-}
+curl http://localhost:8081/api/user/info -H "Authorization: Bearer <token>"
 ```
 
-### Защищенные эндпоинты
-
-Требуют заголовок: `Authorization: Bearer <access-token>`
-
-#### Информация о пользователе
-```bash
-GET /api/user
-Authorization: Bearer <your-access-token>
-```
-
-#### Защищенные данные
-```bash
-GET /api/protected
-Authorization: Bearer <your-access-token>
-```
-
-#### Выход (Logout)
-```bash
-POST /api/auth/logout
-Authorization: Bearer <your-access-token>
-```
-
-## 🔑 Конфигурация JWT
-
-В `src/main/resources/application.properties`:
-
-```properties
-# JWT настройки (для демо)
-jwt.secret=my-super-secret-jwt-key-that-must-be-at-least-256-bits-long-to-work-with-hs256-algorithm-properly
-jwt.access-token-expiration=5000        # 5 секунд (для демонстрации)
-jwt.refresh-token-expiration=300000     # 5 минут
-```
-
-> ⚠️ **Важно:** Это демо-проект! В продакшене используйте переменные окружения для секретных ключей.
-
-## 📁 Структура проекта
-
-```
-src/main/java/com/web_site/JWT/
-├── config/
-│   ├── SecurityConfig.java         # Spring Security конфигурация
-│   └── DataInitializer.java        # Начальные данные
-├── controller/
-│   ├── AuthController.java         # REST API: регистрация/вход
-│   ├── ApiController.java          # Защищенные API эндпоинты
-│   └── PageController.java         # MVC страницы (Thymeleaf)
-├── dto/
-│   ├── LoginRequest.java
-│   ├── LoginResponse.java
-│   └── RefreshTokenRequest.java
-├── model/
-│   ├── User.java                   # JPA сущность пользователя
-│   └── BlacklistedToken.java       # Токены в blacklist
-├── repository/
-│   ├── UserRepository.java
-│   └── BlacklistedTokenRepository.java
-├── security/
-│   ├── JwtTokenProvider.java       # Генерация и валидация JWT
-│   └── JwtAuthenticationFilter.java # Фильтр для проверки токенов
-└── service/
-    ├── UserService.java            # Бизнес-логика пользователей
-    └── TokenBlacklistService.java  # Управление blacklist
-```
-
-## 🧪 Тестирование
-
-### Запуск тестов
-```bash
-./gradlew test
-```
-
-### Пример использования с cURL
+## Запуск
 
 ```bash
-# 1. Регистрация
-curl -X POST http://localhost:8081/api/auth/register \
-  -H "Content-Type: application/json" \
-  -d '{"username":"test","password":"test123"}'
-
-# 2. Вход
-curl -X POST http://localhost:8081/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"username":"test","password":"test123"}'
-
-# Сохраните access_token из ответа
-
-# 3. Доступ к защищенному эндпоинту
-curl -X GET http://localhost:8081/api/user \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
-
-# 4. Выход
-curl -X POST http://localhost:8081/api/auth/logout \
-  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
-```
-
-## 🎨 Web Интерфейс
-
-Доступны страницы с Thymeleaf:
-
-- **http://localhost:8081/login** - Страница входа
-- **http://localhost:8081/protected** - Защищенная страница
-- **http://localhost:8081/profile** - Профиль пользователя
-
-JavaScript автоматически управляет токенами через `token-manager.js`.
-
-## 🔒 Как работает JWT аутентификация
-
-1. **Регистрация/Вход** → Получение Access + Refresh токенов
-2. **Запросы к API** → Отправка Access токена в заголовке
-3. **Истечение Access токена** → Обновление через Refresh токен
-4. **Logout** → Токен добавляется в blacklist (отзывается)
-
-### Временные интервалы (демо):
-- Access токен: **5 секунд** ⏱️
-- Refresh токен: **5 минут** ⏱️
-
-> В продакшене обычно: Access = 15 минут, Refresh = 7-30 дней
-
-## 🗄️ База данных
-
-Используется **H2** (in-memory):
-
-**Таблицы:**
-- `users` - Пользователи (id, username, password, role)
-- `blacklisted_tokens` - Отозванные токены
-
-При старте автоматически создается тестовый пользователь (см. `DataInitializer.java`)
-
-## 🛡️ Безопасность
-
-- ✅ Пароли хешируются через BCrypt
-- ✅ STATELESS сессии (без cookies)
-- ✅ CSRF отключен (для REST API)
-- ✅ Blacklist для отозванных токенов
-- ⚠️ JWT секрет в коде (только для демо!)
-
-## 📚 Полезные команды
-
-```bash
-# Сборка проекта
-./gradlew build
-
-# Запуск приложения
 ./gradlew bootRun
-
-# Запуск тестов
-./gradlew test
-
-# Очистка
-./gradlew clean
-
-# Очистка + сборка
-./gradlew clean build
 ```
+
+`http://localhost:8081`, тестовый пользователь `admin` / `admin`.
+Консоль базы — `/h2-console`, строка `jdbc:h2:mem:testdb`, юзер `sa`, пароль пустой.
+
+## Тесты
+
+```bash
+./gradlew test
+```
+
+Семь тестов на выпуск и проверку токенов — в том числе на то, что чужая подпись и мусор
+вместо токена не проходят.
+
+Один из тестов появился после бага: время выдачи в JWT хранится в секундах, поэтому два
+токена одного юзера, выпущенные подряд, получались одинаковыми. Вышел и сразу зашёл —
+получил токен, который уже в чёрном списке. Починил уникальным `jti` в каждом токене.
+
+## Настройки
+
+| Параметр | Значение |
+|---|---|
+| `jwt.access-token-expiration` | 900000 (15 мин) |
+| `jwt.refresh-token-expiration` | 604800000 (7 дней) |
+| `jwt.blacklist-cleanup-interval` | 3600000 (час) |
+
+Секрет берётся из переменной окружения, в репозитории его нет:
+
+```bash
+export JWT_SECRET="ключ-минимум-32-символа"
+```
+
+Хочешь посмотреть автообновление вживую — поставь `jwt.access-token-expiration=5000`,
+тогда токен истекает за 5 секунд и на защищённой странице видно, как он обновляется.
+
+## Лицензия
+
+[MIT](LICENSE)
